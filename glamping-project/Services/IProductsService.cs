@@ -1,0 +1,122 @@
+﻿using AutoMapper;
+using Microsoft.EntityFrameworkCore;
+using GlampingProyect.Data;
+using GlampingProyect.Web.Core;
+using GlampingProyect.Web.Core.Pagination;
+using GlampingProyect.Web.Data.Entities;
+using GlampingProyect.Web.DTOs;
+using GlampingProyect.Web.Helpers;
+using GlampingProyect.Web.Services;
+
+namespace GlampingProyect.Web.Services
+{
+    public interface IProductsService
+    {
+        Task<Response<ProductDTO>> CreateAsync(ProductDTO dto);
+        Task<Response<ProductDTO>> EditAsync(ProductDTO dto);
+        Task<Response<object>> DeleteAsync(int id);
+        Task<Response<ProductDTO>> GetOneAsync(int id);
+        Task<Response<PaginationResponse<ProductDTO>>> GetPaginationAsync(PaginationRequest request);
+        Task<List<ProductDTO>> GetProductListAsync();
+    }
+
+    public class ProductsService : CustomQueryableOperations, IProductsService
+    {
+        private readonly DataContext _context;
+        private readonly IMapper _mapper;
+
+        public ProductsService(DataContext context, IMapper mapper)
+            : base(context, mapper)
+        {
+            _context = context;
+            _mapper = mapper;
+        }
+
+        public async Task<Response<ProductDTO>> CreateAsync(ProductDTO dto)
+        {
+            try
+            {
+                var entity = _mapper.Map<Product>(dto);
+                await _context.Products.AddAsync(entity);
+                await _context.SaveChangesAsync();
+
+                var responseDto = _mapper.Map<ProductDTO>(entity);
+                return ResponseHelper<ProductDTO>.MakeResponseSuccess(responseDto, "Producto creado con éxito");
+            }
+            catch (DbUpdateException dbEx)
+            {
+                var innerMessage = dbEx.InnerException?.Message ?? dbEx.Message;
+                return ResponseHelper<ProductDTO>.MakeResponseFail($"Error al guardar en la base de datos: {innerMessage}");
+            }
+            catch (Exception ex)
+            {
+                return ResponseHelper<ProductDTO>.MakeResponseFail($"Error inesperado: {ex.Message}");
+            }
+        }
+
+
+        public async Task<Response<ProductDTO>> EditAsync(ProductDTO dto)
+        {
+            return await EditAsync<Product, ProductDTO>(dto, dto.Id);
+        }
+
+        public async Task<Response<object>> DeleteAsync(int id)
+        {
+            Response<object> response = await DeleteAsync<Product>(id);
+            response.Message = !response.IsSuccess ? $"El producto con id: {id} no existe" : response.Message;
+            return response;
+        }
+
+        public async Task<Response<ProductDTO>> GetOneAsync(int id)
+        {
+            try
+            {
+                Product? entity = await _context.Products
+                    .Include(p => p.ProductCategory)
+                    .FirstOrDefaultAsync(x => x.Id == id);
+                if (entity is null)
+                {
+                    return ResponseHelper<ProductDTO>.MakeResponseFail($"No existe el producto con id {id}");
+                }
+
+                ProductDTO dto = _mapper.Map<ProductDTO>(entity);
+                return ResponseHelper<ProductDTO>.MakeResponseSuccess(dto, "Producto encontrado con éxito");
+            }
+            catch (Exception ex)
+            {
+                return ResponseHelper<ProductDTO>.MakeResponseFail(ex);
+            }
+        }
+
+        public async Task<Response<PaginationResponse<ProductDTO>>> GetPaginationAsync(PaginationRequest request)
+        {
+            IQueryable<Product> query = _context.Products
+                .Include(p => p.ProductCategory)
+                .AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(request.Filter))
+            {
+                query = query.Where(p =>
+                    p.ProductName.Contains(request.Filter) ||
+                    p.ProductBarCode.Contains(request.Filter) ||
+                    p.ProductCategory!.ProductCategoryName.Contains(request.Filter));
+            }
+
+            query = query.OrderBy(p => p.Id);
+
+            return await GetPaginationAsync<Product, ProductDTO>(request, query);
+        }
+
+        public async Task<List<ProductDTO>> GetProductListAsync()
+        {
+            return await _context.Products
+                .Select(p => new ProductDTO
+                {
+                    Id = p.Id,
+                    ProductName = p.ProductName,
+                    ProductPrice = p.ProductPrice,
+                    ProductTax = p.ProductTax
+                }).ToListAsync();
+        }
+    }
+}
